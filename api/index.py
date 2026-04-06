@@ -21,6 +21,23 @@ YDL_BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
+
+    # --- Anti-bot tweaks ---
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    },
+
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android"]
+        }
+    },
+
+    "nocheckcertificate": True,
+    "retries": 3,
+    "fragment_retries": 3,
 }
 
 
@@ -57,7 +74,6 @@ async def download_video(video_id: str, quality: str = "best"):
                 info = ydl.extract_info(url, download=True)
                 title = info.get("title", video_id)
 
-            # Find the downloaded file
             files = os.listdir(tmpdir)
             if not files:
                 raise HTTPException(status_code=500, detail="Download failed — no file produced")
@@ -208,7 +224,6 @@ async def download_playlist(playlist_id: str, audio_only: bool = False):
         except yt_dlp.utils.DownloadError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Zip everything up
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for fname in sorted(os.listdir(tmpdir)):
