@@ -21,6 +21,10 @@ YDL_BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
+    "cachedir": False,
+"concurrent_fragment_downloads": 1,
+"nopart": True,
+"overwrites": True,
 
     "http_headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
@@ -76,7 +80,7 @@ async def download_video(video_id: str, quality: str = "best"):
 if not fmt:
     fmt = "bestvideo+bestaudio/best"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    tmpdir = "/tmp"
         output_path = os.path.join(tmpdir, "%(title)s.%(ext)s")
         ydl_opts = {
             **YDL_BASE_OPTS,
@@ -101,8 +105,7 @@ if not fmt:
             filepath = os.path.join(tmpdir, files[0])
             filename = f"{title}.mp4".replace("/", "-")
 
-            with open(filepath, "rb") as f:
-                data = f.read()
+            file_like = open(filepath, "rb")
 
         except yt_dlp.utils.DownloadError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -111,10 +114,10 @@ if not fmt:
                 os.remove(cookiefile)
 
     return StreamingResponse(
-        io.BytesIO(data),
-        media_type="video/mp4",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    file_like,
+    media_type="video/mp4",
+    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+)
 
 
 @app.get("/audio/{video_id}")
@@ -123,7 +126,7 @@ async def download_audio(video_id: str, fmt: str = "mp3"):
 
     audio_format = fmt if fmt in ("mp3", "m4a", "opus", "wav") else "mp3"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    tmpdir = "/tmp"
         output_path = os.path.join(tmpdir, "%(title)s.%(ext)s")
         ydl_opts = {
             **YDL_BASE_OPTS,
@@ -226,7 +229,7 @@ async def get_metadata(video_id: str):
 async def download_playlist(playlist_id: str, audio_only: bool = False):
     url = f"https://www.youtube.com/playlist?list={playlist_id}"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    tmpdir = "/tmp"
         if audio_only:
             ydl_opts = {
                 **YDL_BASE_OPTS,
