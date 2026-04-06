@@ -1,26 +1,22 @@
-import os
 from flask import Flask, request, jsonify
 from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
 
 # -----------------------------
-# CORE CONFIG (SAFE DEFAULTS)
+# BASE OPTIONS (SAFE ONLY)
 # -----------------------------
 BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
 
-    # IMPORTANT: allow playlists when needed
+    # IMPORTANT: avoids playlist confusion unless needed
     "noplaylist": False,
 
-    # 🔥 critical fix: NEVER over-specify formats
+    # CRITICAL FIX: no format negotiation
     "format": "best",
 
-    # prevents ffmpeg merge crashes on serverless
-    "merge_output_format": "mp4",
-
-    # stability for Vercel
+    # DO NOT USE merge_output_format on Vercel (causes crashes)
     "retries": 3,
     "fragment_retries": 3,
     "socket_timeout": 10,
@@ -28,25 +24,18 @@ BASE_OPTS = {
 
 
 # -----------------------------
-# SAFE EXECUTION WRAPPER
+# SAFE EXTRACTOR (NO FALLBACK CHAINS)
 # -----------------------------
-def safe_extract(url, opts):
+def extract(url, opts):
     try:
         with YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
     except Exception as e:
-        # fallback: force generic extractor if YouTube gets picky
-        try:
-            opts = dict(opts)
-            opts["force_generic_extractor"] = True
-            with YoutubeDL(opts) as ydl:
-                return ydl.extract_info(url, download=False)
-        except Exception:
-            return {"error": str(e)}
+        return {"error": str(e)}
 
 
 # -----------------------------
-# HOME / HEALTH CHECK
+# HEALTH CHECK
 # -----------------------------
 @app.route("/", methods=["GET"])
 def home():
@@ -62,11 +51,11 @@ def video():
     if not url:
         return jsonify({"error": "missing url"}), 400
 
-    opts = BASE_OPTS.copy()
+    opts = dict(BASE_OPTS)
     opts["noplaylist"] = True
     opts["format"] = "best"
 
-    info = safe_extract(url, opts)
+    info = extract(url, opts)
 
     if "error" in info:
         return jsonify(info), 500
@@ -90,11 +79,11 @@ def playlist():
     if not url:
         return jsonify({"error": "missing url"}), 400
 
-    opts = BASE_OPTS.copy()
+    opts = dict(BASE_OPTS)
     opts["noplaylist"] = False
     opts["format"] = "best"
 
-    info = safe_extract(url, opts)
+    info = extract(url, opts)
 
     if "error" in info:
         return jsonify(info), 500
@@ -131,7 +120,7 @@ def search():
     if not query:
         return jsonify({"error": "missing query"}), 400
 
-    opts = BASE_OPTS.copy()
+    opts = dict(BASE_OPTS)
 
     # IMPORTANT: prevents deep extraction crashes
     opts.update({
@@ -141,7 +130,7 @@ def search():
         "format": "best",
     })
 
-    info = safe_extract(f"ytsearch10:{query}", opts)
+    info = extract(f"ytsearch10:{query}", opts)
 
     if "error" in info:
         return jsonify(info), 500
@@ -167,7 +156,7 @@ def search():
 
 
 # -----------------------------
-# VERCEL ENTRY
+# VERCEL ENTRYPOINT
 # -----------------------------
 if __name__ == "__main__":
     app.run()
