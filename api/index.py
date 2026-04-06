@@ -65,17 +65,15 @@ async def download_video(video_id: str, quality: str = "best"):
     url = make_video_url(video_id)
 
     format_map = {
-        "best": "bestvideo+bestaudio/best",
-        "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-        "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-        "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-        "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-    }
+    "best": "best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+}
 
-    fmt = format_map.get(quality)
-    if not fmt:
-        fmt = "bestvideo+bestaudio/best"
-
+    fmt = format_map.get(quality) or "best/bestvideo+bestaudio/best"
+    
     tmpdir = "/tmp"
     output_path = os.path.join(tmpdir, "%(title)s.%(ext)s")
 
