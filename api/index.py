@@ -17,16 +17,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def load_cookies_from_env():
-    cookie_data = os.getenv("YOUTUBE_COOKIES")
-    if not cookie_data:
-        return None
-
-    tmp = tempfile.NamedTemporaryFile(delete=False)
-    tmp.write(cookie_data.encode())
-    tmp.close()
-    return tmp.name
-
 YDL_BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
@@ -49,11 +39,26 @@ YDL_BASE_OPTS = {
     "fragment_retries": 3,
 }
 
+
+# ✅ SAFE cookie loader (fixed)
+def load_cookies_from_env():
+    cookie_data = os.getenv("YOUTUBE_COOKIES")
+    if not cookie_data:
+        return None
+
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8")
+        tmp.write(cookie_data)
+        tmp.flush()
+        tmp.close()
+        return tmp.name
+    except Exception:
+        return None
+
+
 def make_video_url(video_id: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
 
-
-# ─── /video/<VIDEO_ID> ────────────────────────────────────────────────────────
 
 @app.get("/video/{video_id}")
 async def download_video(video_id: str, quality: str = "best"):
@@ -76,10 +81,10 @@ async def download_video(video_id: str, quality: str = "best"):
             "outtmpl": output_path,
             "merge_output_format": "mp4",
         }
-        
+
         cookiefile = load_cookies_from_env()
-    if cookiefile:
-        ydl_opts["cookiefile"] = cookiefile
+        if cookiefile:
+            ydl_opts["cookiefile"] = cookiefile
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -98,6 +103,9 @@ async def download_video(video_id: str, quality: str = "best"):
 
         except yt_dlp.utils.DownloadError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            if cookiefile and os.path.exists(cookiefile):
+                os.remove(cookiefile)
 
     return StreamingResponse(
         io.BytesIO(data),
@@ -105,8 +113,6 @@ async def download_video(video_id: str, quality: str = "best"):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
-
-# ─── /audio/<VIDEO_ID> ────────────────────────────────────────────────────────
 
 @app.get("/audio/{video_id}")
 async def download_audio(video_id: str, fmt: str = "mp3"):
@@ -128,8 +134,8 @@ async def download_audio(video_id: str, fmt: str = "mp3"):
         }
 
         cookiefile = load_cookies_from_env()
-    if cookiefile:
-        ydl_opts["cookiefile"] = cookiefile
+        if cookiefile:
+            ydl_opts["cookiefile"] = cookiefile
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -154,6 +160,9 @@ async def download_audio(video_id: str, fmt: str = "mp3"):
 
         except yt_dlp.utils.DownloadError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            if cookiefile and os.path.exists(cookiefile):
+                os.remove(cookiefile)
 
     return StreamingResponse(
         io.BytesIO(data),
@@ -162,18 +171,23 @@ async def download_audio(video_id: str, fmt: str = "mp3"):
     )
 
 
-# ─── /metadata/<VIDEO_ID> ─────────────────────────────────────────────────────
-
 @app.get("/metadata/{video_id}")
 async def get_metadata(video_id: str):
     url = make_video_url(video_id)
     ydl_opts = {**YDL_BASE_OPTS, "skip_download": True}
+
+    cookiefile = load_cookies_from_env()
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        if cookiefile and os.path.exists(cookiefile):
+            os.remove(cookiefile)
 
     safe = {
         "id":           info.get("id"),
@@ -205,8 +219,6 @@ async def get_metadata(video_id: str):
     return JSONResponse(content=safe)
 
 
-# ─── /playlist/<PLAYLIST_ID> ──────────────────────────────────────────────────
-
 @app.get("/playlist/{playlist_id}")
 async def download_playlist(playlist_id: str, audio_only: bool = False):
     url = f"https://www.youtube.com/playlist?list={playlist_id}"
@@ -224,9 +236,6 @@ async def download_playlist(playlist_id: str, audio_only: bool = False):
                     "preferredquality": "192",
                 }],
             }
-            cookiefile = load_cookies_from_env()
-    if cookiefile:
-        ydl_opts["cookiefile"] = cookiefile
         else:
             ydl_opts = {
                 **YDL_BASE_OPTS,
@@ -236,12 +245,19 @@ async def download_playlist(playlist_id: str, audio_only: bool = False):
                 "merge_output_format": "mp4",
             }
 
+        cookiefile = load_cookies_from_env()
+        if cookiefile:
+            ydl_opts["cookiefile"] = cookiefile
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 playlist_title = info.get("title", playlist_id)
         except yt_dlp.utils.DownloadError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            if cookiefile and os.path.exists(cookiefile):
+                os.remove(cookiefile)
 
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -257,8 +273,6 @@ async def download_playlist(playlist_id: str, audio_only: bool = False):
         headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'},
     )
 
-
-# ─── Health check ─────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
