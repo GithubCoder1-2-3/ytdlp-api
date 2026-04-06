@@ -17,12 +17,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def load_cookies_from_env():
+    cookie_data = os.getenv("YOUTUBE_COOKIES")
+    if not cookie_data:
+        return None
+
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.write(cookie_data.encode())
+    tmp.close()
+    return tmp.name
+
 YDL_BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
 
-    # --- Anti-bot tweaks ---
     "http_headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -39,7 +48,6 @@ YDL_BASE_OPTS = {
     "retries": 3,
     "fragment_retries": 3,
 }
-
 
 def make_video_url(video_id: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
@@ -68,6 +76,10 @@ async def download_video(video_id: str, quality: str = "best"):
             "outtmpl": output_path,
             "merge_output_format": "mp4",
         }
+        
+        cookiefile = load_cookies_from_env()
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -114,6 +126,10 @@ async def download_audio(video_id: str, fmt: str = "mp3"):
                 "preferredquality": "192",
             }],
         }
+
+        cookiefile = load_cookies_from_env()
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -208,6 +224,9 @@ async def download_playlist(playlist_id: str, audio_only: bool = False):
                     "preferredquality": "192",
                 }],
             }
+            cookiefile = load_cookies_from_env()
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
         else:
             ydl_opts = {
                 **YDL_BASE_OPTS,
