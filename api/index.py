@@ -1,0 +1,239 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import yt_dlp
+import io
+import os
+import zipfile
+import tempfile
+import json
+
+app = FastAPI(title="YT Downloader API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
+YDL_BASE_OPTS = {
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
+}
+
+
+def make_video_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+# ─── /video/<VIDEO_ID> ────────────────────────────────────────────────────────
+
+@app.get("/video/{video_id}")
+async def download_video(video_id: str, quality: str = "best"):
+    url = make_video_url(video_id)
+
+    format_map = {
+        "best":   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "1080p":  "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]",
+        "720p":   "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]",
+        "480p":   "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]",
+        "360p":   "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]",
+    }
+    fmt = format_map.get(quality, format_map["best"])
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = os.path.join(tmpdir, "%(title)s.%(ext)s")
+        ydl_opts = {
+            **YDL_BASE_OPTS,
+            "format": fmt,
+            "outtmpl": output_path,
+            "merge_output_format": "mp4",
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get("title", video_id)
+
+            # Find the downloaded file
+            files = os.listdir(tmpdir)
+            if not files:
+                raise HTTPException(status_code=500, detail="Download failed — no file produced")
+
+            filepath = os.path.join(tmpdir, files[0])
+            filename = f"{title}.mp4".replace("/", "-")
+
+            with open(filepath, "rb") as f:
+                data = f.read()
+
+        except yt_dlp.utils.DownloadError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="video/mp4",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ─── /audio/<VIDEO_ID> ────────────────────────────────────────────────────────
+
+@app.get("/audio/{video_id}")
+async def download_audio(video_id: str, fmt: str = "mp3"):
+    url = make_video_url(video_id)
+
+    audio_format = fmt if fmt in ("mp3", "m4a", "opus", "wav") else "mp3"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = os.path.join(tmpdir, "%(title)s.%(ext)s")
+        ydl_opts = {
+            **YDL_BASE_OPTS,
+            "format": "bestaudio/best",
+            "outtmpl": output_path,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": audio_format,
+                "preferredquality": "192",
+            }],
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get("title", video_id)
+
+            files = os.listdir(tmpdir)
+            if not files:
+                raise HTTPException(status_code=500, detail="Audio extraction failed")
+
+            filepath = os.path.join(tmpdir, files[0])
+            filename = f"{title}.{audio_format}".replace("/", "-")
+            mime = {
+                "mp3": "audio/mpeg",
+                "m4a": "audio/mp4",
+                "opus": "audio/ogg",
+                "wav": "audio/wav",
+            }.get(audio_format, "audio/mpeg")
+
+            with open(filepath, "rb") as f:
+                data = f.read()
+
+        except yt_dlp.utils.DownloadError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=mime,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ─── /metadata/<VIDEO_ID> ─────────────────────────────────────────────────────
+
+@app.get("/metadata/{video_id}")
+async def get_metadata(video_id: str):
+    url = make_video_url(video_id)
+    ydl_opts = {**YDL_BASE_OPTS, "skip_download": True}
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    safe = {
+        "id":           info.get("id"),
+        "title":        info.get("title"),
+        "description":  info.get("description"),
+        "duration":     info.get("duration"),
+        "view_count":   info.get("view_count"),
+        "like_count":   info.get("like_count"),
+        "channel":      info.get("uploader"),
+        "channel_url":  info.get("uploader_url"),
+        "upload_date":  info.get("upload_date"),
+        "thumbnail":    info.get("thumbnail"),
+        "tags":         info.get("tags", []),
+        "categories":   info.get("categories", []),
+        "formats": [
+            {
+                "format_id":  f.get("format_id"),
+                "ext":        f.get("ext"),
+                "resolution": f.get("resolution"),
+                "fps":        f.get("fps"),
+                "vcodec":     f.get("vcodec"),
+                "acodec":     f.get("acodec"),
+                "filesize":   f.get("filesize"),
+                "tbr":        f.get("tbr"),
+            }
+            for f in info.get("formats", [])
+        ],
+    }
+    return JSONResponse(content=safe)
+
+
+# ─── /playlist/<PLAYLIST_ID> ──────────────────────────────────────────────────
+
+@app.get("/playlist/{playlist_id}")
+async def download_playlist(playlist_id: str, audio_only: bool = False):
+    url = f"https://www.youtube.com/playlist?list={playlist_id}"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        if audio_only:
+            ydl_opts = {
+                **YDL_BASE_OPTS,
+                "noplaylist": False,
+                "format": "bestaudio/best",
+                "outtmpl": os.path.join(tmpdir, "%(playlist_index)s - %(title)s.%(ext)s"),
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
+            }
+        else:
+            ydl_opts = {
+                **YDL_BASE_OPTS,
+                "noplaylist": False,
+                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "outtmpl": os.path.join(tmpdir, "%(playlist_index)s - %(title)s.%(ext)s"),
+                "merge_output_format": "mp4",
+            }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                playlist_title = info.get("title", playlist_id)
+        except yt_dlp.utils.DownloadError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # Zip everything up
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fname in sorted(os.listdir(tmpdir)):
+                zf.write(os.path.join(tmpdir, fname), fname)
+        zip_buffer.seek(0)
+        zip_data = zip_buffer.read()
+
+    zip_filename = f"{playlist_title}.zip".replace("/", "-")
+    return StreamingResponse(
+        io.BytesIO(zip_data),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'},
+    )
+
+
+# ─── Health check ─────────────────────────────────────────────────────────────
+
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "endpoints": {
+            "video":    "/video/<VIDEO_ID>?quality=best|1080p|720p|480p|360p",
+            "audio":    "/audio/<VIDEO_ID>?fmt=mp3|m4a|opus|wav",
+            "metadata": "/metadata/<VIDEO_ID>",
+            "playlist": "/playlist/<PLAYLIST_ID>?audio_only=false",
+        }
+    }
